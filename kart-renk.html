@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kartı kaldır, ayı yürüsün</title>
+<style>
+:root{--bg:#f3efe4;--ink:#2b2a33;--blue:#2f6fdb;--green:#3fa34d;--red:#e0523f;--yellow:#f2b632;--cell:56px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Trebuchet MS",Verdana,sans-serif;padding:14px}
+h1{margin:0 0 10px;font-size:26px;text-align:center}
+.wrap{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+.panel{display:flex;flex-direction:column;gap:10px;align-items:center}
+button{font:inherit;font-size:16px;font-weight:bold;border:0;border-radius:10px;padding:8px 12px;background:var(--ink);color:#fff;cursor:pointer}
+button.go{font-size:20px;padding:10px 24px;background:var(--red)}
+.cam{position:relative;width:480px;max-width:94vw}
+video,#ov{width:100%;display:block;border-radius:10px;background:#000}
+#ov{position:absolute;inset:0;height:100%;background:none}
+#big{position:absolute;left:0;right:0;bottom:10px;text-align:center;font-size:44px;font-weight:bold;color:#fff;text-shadow:0 2px 6px #000;pointer-events:none}
+#barw{width:480px;max-width:94vw;height:12px;background:#d8d3c4;border-radius:6px;overflow:hidden}
+#bar{height:100%;width:0;background:var(--green);transition:width .2s}
+.bar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center}
+#grid{display:grid;grid-template-columns:repeat(6,var(--cell));gap:3px;background:var(--ink);padding:3px;border-radius:10px;position:relative}
+.c{width:var(--cell);height:var(--cell);background:#fff9e8;display:flex;align-items:center;justify-content:center;font-size:30px}
+#bear{position:absolute;width:var(--cell);height:var(--cell);display:flex;align-items:center;justify-content:center;transition:left .35s,top .35s;pointer-events:none}
+#bear div{width:40px;height:40px;border-radius:12px;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px;transition:transform .3s}
+#slots{display:flex;gap:5px}
+.s{width:42px;height:42px;border-radius:9px;border:3px dashed #aaa;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:bold;color:#fff}
+.s.F{background:var(--blue);border:3px solid var(--blue)}.s.L{background:var(--yellow);border:3px solid var(--yellow);color:var(--ink)}.s.R{background:var(--green);border:3px solid var(--green)}
+.s.on{outline:4px solid var(--red)}
+#words{font-size:22px;font-weight:bold;min-height:32px;text-align:center;max-width:480px}
+#msg{min-height:28px;font-size:20px;font-weight:bold;text-align:center}
+#st{font-size:14px;opacity:.8;text-align:center;max-width:480px}
+</style>
+</head>
+<body>
+<h1>Kartı kaldır, ayı yürüsün</h1>
+<div class="wrap">
+ <div class="panel">
+  <div class="cam"><video id="v" autoplay playsinline muted></video><canvas id="ov"></canvas><div id="big"></div></div>
+  <div id="barw"><div id="bar"></div></div>
+  <div id="words">Kartı kutunun içinde havaya kaldır.</div>
+  <div class="bar"><label>Hassasiyet <input type="range" id="sens" min="10" max="60" value="25"></label></div>
+  <div id="st">Kamera açılıyor...</div>
+ </div>
+ <div class="panel">
+  <div id="msg"></div>
+  <div id="grid"><div id="bear"><div id="arrow">▲</div></div></div>
+  <div id="slots"></div>
+  <div class="bar"><button class="go" id="go">Başlat</button><button id="del">Sil</button><button id="lv">Sonraki seviye</button></div>
+ </div>
+</div>
+<script>
+const N=6,SLOTS=8,DX=[0,1,0,-1],DY=[-1,0,1,0];
+const NAME={F:'İleri',L:'Sola dön',R:'Sağa dön',G:'Başlat'},LABEL={F:'↑',L:'↶',R:'↷'},CNAME={F:'mavi',L:'sarı',R:'yeşil',G:'kırmızı'};
+const levels=[{s:[0,5],d:1,g:[3,5],r:[]},{s:[0,5],d:0,g:[3,2],r:[[2,3]]},{s:[0,0],d:2,g:[3,3],r:[[2,2],[1,3]]}];
+let lv=0,prog=[],pos,dir,running=false,fresh=false;
+const $=id=>document.getElementById(id),wait=ms=>new Promise(r=>setTimeout(r,ms));
+const grid=$('grid'),bear=$('bear'),arrow=$('arrow'),msg=$('msg'),slotsEl=$('slots'),st=$('st'),words=$('words'),big=$('big'),bar=$('bar');
+const cells=[],sl=[];
+for(let i=0;i<N*N;i++){const c=document.createElement('div');c.className='c';grid.appendChild(c);cells.push(c)}
+for(let i=0;i<SLOTS;i++){const s=document.createElement('div');s.className='s';slotsEl.appendChild(s);sl.push(s)}
+
+function say(t){try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang='tr-TR';speechSynthesis.speak(u)}catch(e){}}
+function place(){const [x,y]=pos,p=cells[0].offsetWidth+3;bear.style.left=(3+x*p)+'px';bear.style.top=(3+y*p)+'px';arrow.style.transform='rotate('+(dir*90)+'deg)'}
+function draw(a){sl.forEach((s,i)=>{const c=prog[i];s.className='s'+(c?' '+c:'')+(i===a?' on':'');s.textContent=c?LABEL[c]:''});
+  words.textContent=prog.length?prog.map(c=>NAME[c]).join(' → '):'Kartı kutunun içinde havaya kaldır.'}
+function load(){
+  const L=levels[lv];pos=[...L.s];dir=L.d;running=false;
+  cells.forEach(c=>c.textContent='');
+  cells[L.g[1]*N+L.g[0]].textContent='⭐';
+  L.r.forEach(([x,y])=>cells[y*N+x].textContent='🪨');
+  bear.style.transition='none';place();void bear.offsetWidth;bear.style.transition='';
+  msg.textContent='Seviye '+(lv+1);draw(-1);
+}
+async function run(){
+  if(running||!prog.length)return;
+  const keep=[...prog];load();prog=keep;draw(-1);running=true;msg.textContent='Çalışıyor...';
+  const L=levels[lv];
+  for(let i=0;i<prog.length;i++){
+    draw(i);const c=prog[i];
+    if(c==='L')dir=(dir+3)%4;else if(c==='R')dir=(dir+1)%4;
+    else{
+      const nx=pos[0]+DX[dir],ny=pos[1]+DY[dir];
+      if(nx<0||ny<0||nx>=N||ny>=N||L.r.some(r=>r[0]===nx&&r[1]===ny)){place();msg.textContent='Ayı çarptı! Kartları değiştir.';draw(-1);running=false;fresh=true;return}
+      pos=[nx,ny];
+    }
+    place();await wait(650);
+  }
+  draw(-1);running=false;fresh=true;
+  const ok=pos[0]===L.g[0]&&pos[1]===L.g[1];
+  msg.textContent=ok?'Harika! Yıldıza ulaştın! 🎉':'Yıldıza varamadı. Yeni kartlar göster.';
+  say(ok?'Harika!':'Tekrar dene');
+}
+$('go').onclick=run;
+$('del').onclick=()=>{if(!running){prog=[];draw(-1)}};
+$('lv').onclick=()=>{lv=(lv+1)%levels.length;prog=[];load()};
+addEventListener('keydown',e=>{if(e.key==='Enter')run();if(e.key==='Backspace'&&!running){prog.pop();draw(-1)}});
+addEventListener('resize',place);
+
+/* Renk okuma: kutudaki piksellerin hangi kart rengine uyduğunu sayar. Öğretme gerekmez. */
+const v=$('v'),ov=$('ov'),oc=ov.getContext('2d'),tmp=document.createElement('canvas'),tc=tmp.getContext('2d',{willReadFrequently:true});
+tmp.width=tmp.height=48;
+let armed=true,cand='-',same=0,emptyN=0,shown='-';
+function box(){const s=Math.min(v.videoWidth,v.videoHeight)*0.8;return {s,x:(v.videoWidth-s)/2,y:(v.videoHeight-s)/2}}
+function hsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;
+  if(d){if(mx===r)h=((g-b)/d)%6;else if(mx===g)h=(b-r)/d+2;else h=(r-g)/d+4;h*=60;if(h<0)h+=360}
+  return [h,mx?d/mx:0,mx]}
+function classify(){
+  const b=box();tc.drawImage(v,b.x,b.y,b.s,b.s,0,0,48,48);
+  const d=tc.getImageData(0,0,48,48).data,n=48*48,c={F:0,L:0,R:0,G:0};
+  for(let i=0;i<d.length;i+=4){
+    const [h,s,val]=hsv(d[i],d[i+1],d[i+2]);
+    if(val<0.3)continue;
+    if(h>=195&&h<=250&&s>=0.4)c.F++;
+    else if(h>=32&&h<=65&&s>=0.5)c.L++;
+    else if(h>=85&&h<=165&&s>=0.35)c.R++;
+    else if((h<=12||h>=345)&&s>=0.55)c.G++;
+  }
+  let best='-',bf=0;
+  for(const k in c){const f=c[k]/n;if(f>bf){bf=f;best=k}}
+  const min=$('sens').value/100;
+  return {lab:bf>=min?best:'-',f:bf};
+}
+function paint(lab){
+  ov.width=v.videoWidth;ov.height=v.videoHeight;const b=box();
+  oc.clearRect(0,0,ov.width,ov.height);oc.lineWidth=5;
+  oc.strokeStyle=lab==='-'?'rgba(255,255,255,.85)':'#f2b632';
+  oc.setLineDash([16,10]);oc.strokeRect(b.x,b.y,b.s,b.s);
+}
+function accept(lab){
+  big.textContent=NAME[lab];setTimeout(()=>{big.textContent=''},1200);say(NAME[lab]);
+  if(lab==='G'){run();return}
+  if(running)return;
+  if(fresh){prog=[];fresh=false}
+  if(prog.length<SLOTS){prog.push(lab);draw(-1)}
+}
+function handle(lab){
+  if(lab==='-'){emptyN++;same=0;cand='-';bar.style.width='0';if(emptyN>=2)armed=true;st.textContent='Kart bekleniyor...';return}
+  emptyN=0;
+  if(lab===cand)same++;else{cand=lab;same=1}
+  st.textContent='Görülen: '+CNAME[lab]+' kart ('+NAME[lab]+')';
+  if(!armed){bar.style.width='0';st.textContent+=' - kartı indir';return}
+  bar.style.width=Math.min(100,same/3*100)+'%';
+  if(same>=3){armed=false;bar.style.width='0';accept(lab)}
+}
+function tick(){
+  if(v.videoWidth&&!running){const r=classify();shown=r.lab;handle(r.lab);paint(r.lab)}
+  else if(v.videoWidth)paint('-');
+  setTimeout(tick,300);
+}
+navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:640,height:480}})
+ .then(s=>{v.srcObject=s;tick()})
+ .catch(e=>{st.textContent='Kameraya erişilemedi: '+e.message});
+load();
+</script>
+</body>
+</html>
