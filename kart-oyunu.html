@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kart Oyunu</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.6"></script>
+<style>
+:root{--bg:#f3efe4;--ink:#2b2a33;--blue:#2f6fdb;--green:#3fa34d;--red:#e0523f;--yellow:#f2b632;--cell:56px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Trebuchet MS",Verdana,sans-serif;padding:14px}
+h1{margin:0 0 10px;font-size:26px;text-align:center}
+.wrap{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+.panel{display:flex;flex-direction:column;gap:10px;align-items:center}
+button,select{font:inherit;font-size:16px;font-weight:bold;border:0;border-radius:10px;padding:8px 12px;background:var(--ink);color:#fff;cursor:pointer}
+select{background:#fff;color:var(--ink);border:2px solid var(--ink)}
+button.f{background:var(--blue)}button.l{background:var(--yellow);color:var(--ink)}button.r{background:var(--green)}button.go{background:var(--red);font-size:22px;padding:12px 28px}
+.cam{position:relative;width:480px;max-width:94vw}
+video,#ov{width:100%;display:block;border-radius:10px;background:#000}
+#ov{position:absolute;inset:0;height:100%;background:none}
+.bar{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;align-items:center}
+#grid{display:grid;grid-template-columns:repeat(6,var(--cell));gap:3px;background:var(--ink);padding:3px;border-radius:10px;position:relative}
+.c{width:var(--cell);height:var(--cell);background:#fff9e8;display:flex;align-items:center;justify-content:center;font-size:30px}
+#bear{position:absolute;width:var(--cell);height:var(--cell);display:flex;align-items:center;justify-content:center;transition:left .35s,top .35s;pointer-events:none}
+#bear div{width:40px;height:40px;border-radius:12px;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px;transition:transform .3s}
+#slots{display:flex;gap:5px}
+.s{width:42px;height:42px;border-radius:9px;border:3px dashed #aaa;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:bold;color:#fff}
+.s.F{background:var(--blue);border:3px solid var(--blue)}.s.L{background:var(--yellow);border:3px solid var(--yellow);color:var(--ink)}.s.R{background:var(--green);border:3px solid var(--green)}
+.s.on{outline:4px solid var(--red)}
+#words{font-size:24px;font-weight:bold;min-height:34px;text-align:center;max-width:480px}
+#msg{min-height:28px;font-size:20px;font-weight:bold;text-align:center}
+#st{font-size:13px;opacity:.75;text-align:center;max-width:480px}
+</style>
+</head>
+<body>
+<h1>Kartları göster, ayı yürüsün</h1>
+<div class="wrap">
+ <div class="panel">
+  <div class="cam"><video id="v" autoplay playsinline muted></video><canvas id="ov"></canvas></div>
+  <div id="words">Kartları şeritteki kutulara diz.</div>
+  <div class="bar">
+   <span>Öğret (kart 1. kutuda):</span>
+   <select id="zs"></select>
+  </div>
+  <div class="bar">
+   <button class="f" data-k="F">İleri</button>
+   <button class="l" data-k="L">Sola</button>
+   <button class="r" data-k="R">Sağa</button>
+   <button data-k="-">Boş</button>
+   <button id="rs">Sıfırla</button>
+  </div>
+  <div id="st">Yapay zeka modeli yükleniyor...</div>
+ </div>
+ <div class="panel">
+  <div id="msg"></div>
+  <div id="grid"><div id="bear"><div id="arrow">▲</div></div></div>
+  <div id="slots"></div>
+  <div class="bar"><button class="go" id="go">Başlat</button><button id="lv">Sonraki seviye</button></div>
+ </div>
+</div>
+<script>
+const N=6,SLOTS=8,DX=[0,1,0,-1],DY=[-1,0,1,0],NAME={F:'İleri',L:'Sola dön',R:'Sağa dön'},LABEL={F:'↑',L:'↶',R:'↷'};
+const levels=[{s:[0,5],d:1,g:[3,5],r:[]},{s:[0,5],d:0,g:[3,2],r:[[2,3]]},{s:[0,0],d:2,g:[3,3],r:[[2,2],[1,3]]}];
+let lv=0,prog=[],pos,dir,running=false;
+const $=id=>document.getElementById(id), wait=ms=>new Promise(r=>setTimeout(r,ms));
+const grid=$('grid'),bear=$('bear'),arrow=$('arrow'),msg=$('msg'),slotsEl=$('slots'),st=$('st'),words=$('words');
+const cells=[],sl=[];
+for(let i=0;i<N*N;i++){const c=document.createElement('div');c.className='c';grid.appendChild(c);cells.push(c)}
+for(let i=0;i<SLOTS;i++){const s=document.createElement('div');s.className='s';slotsEl.appendChild(s);sl.push(s)}
+for(let i=1;i<=SLOTS;i++){const o=document.createElement('option');o.value=i-1;o.textContent='Kutu '+i;$('zs').appendChild(o)}
+
+function place(){const [x,y]=pos,p=cells[0].offsetWidth+3;bear.style.left=(3+x*p)+'px';bear.style.top=(3+y*p)+'px';arrow.style.transform='rotate('+(dir*90)+'deg)'}
+function draw(a){sl.forEach((s,i)=>{const c=prog[i];s.className='s'+(c?' '+c:'')+(i===a?' on':'');s.textContent=c?LABEL[c]:''})}
+function load(){
+  const L=levels[lv];pos=[...L.s];dir=L.d;running=false;
+  cells.forEach(c=>c.textContent='');
+  cells[L.g[1]*N+L.g[0]].textContent='⭐';
+  L.r.forEach(([x,y])=>cells[y*N+x].textContent='🪨');
+  bear.style.transition='none';place();void bear.offsetWidth;bear.style.transition='';
+  msg.textContent='Seviye '+(lv+1);draw(-1);
+}
+async function run(){
+  if(running||!prog.length)return;
+  const keep=[...prog];load();prog=keep;running=true;msg.textContent='Çalışıyor...';
+  const L=levels[lv];
+  for(let i=0;i<prog.length;i++){
+    draw(i);const c=prog[i];
+    if(c==='L')dir=(dir+3)%4;else if(c==='R')dir=(dir+1)%4;
+    else{
+      const nx=pos[0]+DX[dir],ny=pos[1]+DY[dir];
+      if(nx<0||ny<0||nx>=N||ny>=N||L.r.some(r=>r[0]===nx&&r[1]===ny)){place();msg.textContent='Ayı çarptı! Kartları değiştir.';draw(-1);running=false;return}
+      pos=[nx,ny];
+    }
+    place();await wait(650);
+  }
+  draw(-1);running=false;
+  msg.textContent=(pos[0]===L.g[0]&&pos[1]===L.g[1])?'Harika! Yıldıza ulaştın! 🎉':'Yıldıza varamadı. Kartları değiştir.';
+}
+$('go').onclick=run;
+$('lv').onclick=()=>{lv=(lv+1)%levels.length;prog=[];load()};
+addEventListener('keydown',e=>{if(e.key==='Enter')run()});
+addEventListener('resize',place);
+
+/* Yapay zeka: MobileNet (özellik çıkarır) + KNN (kartları öğrenir) */
+const v=$('v'),ov=$('ov'),oc=ov.getContext('2d'),tmp=document.createElement('canvas');
+tmp.width=tmp.height=224;
+let net,knn,ready=false,hist=[],lastRead=Array(SLOTS).fill('-');
+function crop(z){
+  const vw=v.videoWidth,vh=v.videoHeight,zw=vw/SLOTS,by=vh*0.25,bh=vh*0.5;
+  tmp.getContext('2d').drawImage(v,z*zw,by,zw,bh,0,0,224,224);
+  return tf.browser.fromPixels(tmp);
+}
+function counts(){
+  const c=knn.getClassExampleCount();
+  st.textContent='Öğrenilen örnek → İleri: '+(c.F||0)+', Sola: '+(c.L||0)+', Sağa: '+(c.R||0)+', Boş: '+(c['-']||0)+'. Her kart için en az 1 kez öğret.';
+}
+function save(){try{const ds=knn.getClassifierDataset(),o={};for(const k in ds)o[k]={d:Array.from(ds[k].dataSync()),s:ds[k].shape};localStorage.setItem('knn-kart',JSON.stringify(o))}catch(e){}}
+function restore(){try{const o=JSON.parse(localStorage.getItem('knn-kart')||'null');if(!o)return;const ds={};for(const k in o)ds[k]=tf.tensor(o[k].d,o[k].s);knn.setClassifierDataset(ds)}catch(e){}}
+async function teach(k){
+  if(!ready)return;
+  const zs=k==='-'?[0,1,2,3,4,5,6,7]:[+$('zs').value],rounds=k==='-'?2:8;
+  for(let r=0;r<rounds;r++){
+    for(const z of zs){const e=tf.tidy(()=>net.infer(crop(z),true));knn.addExample(e,k);e.dispose()}
+    await wait(120);
+  }
+  save();counts();
+}
+document.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>teach(b.dataset.k));
+$('rs').onclick=()=>{knn.clearAllClasses();try{localStorage.removeItem('knn-kart')}catch(e){}counts()};
+
+function paint(){
+  ov.width=v.videoWidth||640;ov.height=v.videoHeight||480;
+  const zw=ov.width/SLOTS,by=ov.height*0.25,bh=ov.height*0.5;
+  oc.clearRect(0,0,ov.width,ov.height);oc.lineWidth=3;oc.font='bold 22px sans-serif';
+  for(let z=0;z<SLOTS;z++){
+    oc.strokeStyle=lastRead[z]==='-'?'rgba(255,255,255,.8)':'#f2b632';
+    oc.strokeRect(z*zw+2,by,zw-4,bh);
+    oc.fillStyle='#fff';oc.fillText(z+1,z*zw+8,by-6);
+    if(lastRead[z]!=='-'){oc.fillStyle='#f2b632';oc.fillText(LABEL[lastRead[z]],z*zw+zw/2-8,by+bh/2+8)}
+  }
+}
+async function tick(){
+  if(ready&&v.videoWidth&&knn.getNumClasses()>=2&&!running){
+    const res=[];
+    for(let z=0;z<SLOTS;z++){
+      const e=tf.tidy(()=>net.infer(crop(z),true));
+      const p=await knn.predictClass(e,5);e.dispose();
+      res.push(p.confidences[p.label]>=0.6?p.label:'-');
+    }
+    hist.push(res.join(''));if(hist.length>3)hist.shift();
+    if(hist.length===3&&hist.every(h=>h===hist[0])){
+      lastRead=res;
+      let last=-1;res.forEach((c,i)=>{if(c!=='-')last=i});
+      prog=res.slice(0,last+1).filter(c=>c!=='-');
+      draw(-1);
+      words.textContent=prog.length?prog.map(c=>NAME[c]).join(' → '):'Kartları şeritteki kutulara diz.';
+    }
+    paint();
+  } else if(v.videoWidth)paint();
+  setTimeout(tick,500);
+}
+(async()=>{
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:640,height:480}});
+    v.srcObject=stream;
+  }catch(e){st.textContent='Kameraya erişilemedi: '+e.message;return}
+  try{
+    net=await mobilenet.load();knn=knnClassifier.create();restore();ready=true;counts();
+  }catch(e){st.textContent='Model yüklenemedi (internet gerekli): '+e.message;return}
+  tick();
+})();
+load();
+</script>
+</body>
+</html>
